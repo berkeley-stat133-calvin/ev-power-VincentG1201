@@ -8,22 +8,124 @@ format: typst
 ## **Part 0: libraries**
 
 ```{r}
-
+library(tidyverse)
+library(lubridate)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+Chosen Question: How renewable energy, electricity price, and EV adoption are related across different US states
 
 ## **Part 2: Data Preparation and Cleaning**
 
 ```{r}
+##Load the data
+renew_2021 <- read_csv("data/renew-use-2021.csv")
+renew_2022 <- read_csv("data/renew-use-2022.csv")
+renew_2023 <- read_csv("data/renew-use-2023.csv")
+total_2021 <- read_csv("data/total-use-2021.csv")
+total_2022 <- read_csv("data/total-use-2022.csv")
+total_2023 <- read_csv("data/total-use-2023.csv")
+av_energy_price <- read_csv("data/av-energy-price-2021-2023.csv")
+ev_registration <- read_csv("data/ev-registrations-by-state-2023.csv")
 
+##Data preparation
+ev_registration <- ev_registration |>
+    drop_na() |>
+    rename(STATE = `electric vehicle registrations_by_state (2023)`, Count_EVs = `...2`) |>
+    slice(-1) |>
+    mutate(Count_EVs = str_remove_all(Count_EVs, "[^0-9]")) |>
+    mutate(Count_EVs = as.numeric(Count_EVs)) |>
+    slice(-n())
+
+renew_2021 <- renew_2021 |>
+    mutate(Renewable_Use_2021 = as.numeric(str_remove_all(Renewable_Use_2021, "[^0-9]")))
+
+renew_2022 <- renew_2022 |>
+    mutate(Renewable_Use_2022 = as.numeric(str_remove_all(Renewable_Use_2022, "[^0-9]")))
+
+renew_2023 <- renew_2023 |>
+    mutate(Renewable_Use_2023 = as.numeric(str_remove_all(Renewable_Use_2023, "[^0-9]")))
+
+#cleaning av_energy_price
+av_energy_price <- av_energy_price |>
+    slice(-1)
+    
+clean_lst <- str_split(av_energy_price$`Total energy average price, dollars per million Btu,,,`, ",")
+data_matrix <- do.call(rbind, clean_lst)
+cleaned_av_energy_price <- as_tibble(data_matrix, .name_repair = "minimal")
+colnames(cleaned_av_energy_price) <- c("State", "year_2021", "year_2022", "year_2023")
+cleaned_av_energy_price <- cleaned_av_energy_price |>
+    mutate(year_2021 = as.numeric(str_remove_all(year_2021, "[^0-9\\.]"))) |>
+    mutate(year_2022 = as.numeric(str_remove_all(year_2022, "[^0-9\\.]"))) |>
+    mutate(year_2023 = str_remove_all(year_2023, "[^0-9//.]")) |>
+    mutate(year_2023 = as.numeric(str_remove_all(year_2023, "\\.$"))) |>
+    slice(-n())
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
 
 ```{r}
+## Combine renewable energy data for 2021–2023
+renew_all <- renew_2021 |>
+  left_join(renew_2022, by = "State") |>
+  left_join(renew_2023, by = "State")
+
+## Combine total energy use data
+total_all <- total_2021 |>
+  left_join(total_2022, by = "State") |>
+  left_join(total_2023, by = "State")
+
+## Merge renewable and total energy use
+merged_use <- renew_all |>
+  left_join(total_all, by = "STATE") |>
+  mutate(
+    renewable_share_2021 = Renewable_Use_2021 / Total_Use_2021,
+    renewable_share_2022 = Renewable_Use_2022 / Total_Use_2022,
+    renewable_share_2023 = Renewable_Use_2023 / Total_Use_2023
+  )
+
+## Merge with energy price and EV registration
+data_all <- merged_use |>
+  left_join(cleaned_av_energy_price, by = c("STATE" = "State")) |>
+  left_join(ev_registration, by = "STATE") |>
+  rename(price_2023 = year_2023, ev_count = Count_EVs)
+
+## Relationship between renewable energy share and EV registrations
+data_all |>
+  drop_na(ev_count, renewable_share_2023) |>
+  ggplot(aes(renewable_share_2023, ev_count)) +
+  geom_point(color = "orange", size = 3) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "EV Registrations vs Renewable Energy Share (2023)",
+    x = "Renewable Share (2023)",
+    y = "EV Registrations (2023)"
+  )
+
+## Relationship between energy price and EV registrations
+data_all |>
+  drop_na(ev_count, price_2023) |>
+  ggplot(aes(price_2023, ev_count)) +
+  geom_point(color = "purple", size = 3) +
+  geom_smooth(method = "lm", se = TRUE, color = "black") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "EV Registrations vs Energy Price (2023)",
+    x = "Average Energy Price (2023)",
+    y = "EV Registrations (2023)"
+  )
+
+## Calculate correlations
+cor_ev_renew <- cor(data_all$ev_count, data_all$renewable_share_2023, use = "complete.obs")
+cor_ev_price <- cor(data_all$ev_count, data_all$price_2023, use = "complete.obs")
+
+tibble(
+  Relationship = c("EV vs Renewable Share", "EV vs Energy Price"),
+  Correlation = c(cor_ev_renew, cor_ev_price)
+)
 
 ```
 
